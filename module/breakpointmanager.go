@@ -40,6 +40,17 @@ func CreateBreakPointManager(listener IEventListener, BTF_File string, process *
 	}
 }
 
+func (this *BreakPointManager) SetProcess(process *controller.Process) {
+	this.process = process
+}
+
+func (this *BreakPointManager) Reset() {
+	this.BreakPoints = nil
+	this.temporaryBreakPoint = nil
+	this.TempBreakTid = 0
+	this.Running = false
+}
+
 func checkOffset(offset uint64) bool {
 	return offset%4 == 0
 }

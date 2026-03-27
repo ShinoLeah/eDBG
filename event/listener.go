@@ -55,6 +55,9 @@ func getHostByteOrder() binary.ByteOrder {
 }
 
 func (this *EventListener) Workdata(data []byte) {
+	if this.client == nil || this.client.Process == nil {
+		return
+	}
 	<-this.client.Done
 	bo := this.ByteOrder
 	context := &controller.ProcessContext{}
@@ -70,7 +73,7 @@ func (this *EventListener) Workdata(data []byte) {
 	} else {
 		context.Pstate = 0xFFFFFFFF
 	}
-	this.process.Context = context
+	this.client.Process.Context = context
 	this.client.RecordBreakpointHit()
 	this.client.Incoming <- true
 }
@@ -95,7 +98,9 @@ func (this *EventListener) Run() {
 			// fmt.Println(this.WaitingEvents)
 			if this.WaitingEvents == 0 {
 				// fmt.Println("OK, Continue.")
-				this.process.Continue()
+				if this.client != nil && this.client.Process != nil {
+					this.client.Process.Continue()
+				}
 			}
 		}
 	}()
@@ -115,6 +120,10 @@ func (this *EventListener) PassEvent(IsHardware bool) {
 	this.client.NotifyContinue <- true
 }
 func (this *EventListener) WorkEvent(data []byte) {
+	if this.client == nil || this.client.Process == nil {
+		return
+	}
+	process := this.client.Process
 	// fmt.Println("Event: ", this.ByteOrder.Uint32(data[4:8]))
 	for {
 		if !this.client.Working {
@@ -123,21 +132,21 @@ func (this *EventListener) WorkEvent(data []byte) {
 	}
 	// fmt.Println("Event Start:", this.ByteOrder.Uint32(data[4:8]))
 	this.client.Working = true
-	this.process.UpdatePidList()
+	process.UpdatePidList()
 	bo := this.ByteOrder
 	this.pid = bo.Uint32(data[4:8])
 	nowTid := bo.Uint32(data[12+8*34 : 16+8*34])
 	PC := bo.Uint64(data[12+8*32 : 12+8*33])
 
-	for _, ablepid := range this.process.PidList {
+	for _, ablepid := range process.PidList {
 		if this.pid == ablepid {
-			this.process.WorkPid = this.pid
-			this.process.StoppedPID(this.pid)
+			process.WorkPid = this.pid
+			process.StoppedPID(this.pid)
 			if this.client.BrkManager.TempBreakTid != 0 {
 				// 临时断点判断线程 ID
 				if PC == 0xFFFFFFFF {
 					if nowTid == this.client.BrkManager.TempBreakTid {
-						this.process.WorkTid = nowTid
+						process.WorkTid = nowTid
 						if PC == 0xFFFFFFFF {
 							dataRaw := <-this.Record
 							this.Incomingdata <- dataRaw.RawSample[12:]
@@ -165,7 +174,7 @@ func (this *EventListener) WorkEvent(data []byte) {
 				if t.Thread.Tid != 0 {
 					valid = true
 					if nowTid == t.Thread.Tid {
-						this.process.WorkTid = nowTid
+						process.WorkTid = nowTid
 						if PC == 0xFFFFFFFF {
 							dataRaw := <-this.Record
 							this.Incomingdata <- dataRaw.RawSample[12:]
@@ -178,7 +187,7 @@ func (this *EventListener) WorkEvent(data []byte) {
 					continue
 				}
 				if t.Thread.Name != "" {
-					tList, err := this.process.GetCurrentThreads()
+					tList, err := process.GetCurrentThreads()
 					if err != nil {
 						fmt.Printf("WARNING: Failed to get threads: %v. Filters on thread name not working.\n", err)
 						continue
@@ -190,8 +199,8 @@ func (this *EventListener) WorkEvent(data []byte) {
 							valid = true
 							found = true
 							if tInfo.Tid == nowTid {
-								this.process.WorkTid = nowTid
-								this.process.StoppedPID(this.pid)
+								process.WorkTid = nowTid
+								process.StoppedPID(this.pid)
 								if PC == 0xFFFFFFFF {
 									dataRaw := <-this.Record
 									this.Incomingdata <- dataRaw.RawSample[12:]
@@ -211,8 +220,8 @@ func (this *EventListener) WorkEvent(data []byte) {
 			}
 			if !valid {
 				// 没有可用的线程过滤器，按照 pid 工作
-				this.process.WorkTid = nowTid
-				this.process.StoppedPID(this.pid)
+				process.WorkTid = nowTid
+				process.StoppedPID(this.pid)
 				if PC == 0xFFFFFFFF {
 					dataRaw := <-this.Record
 					this.Incomingdata <- dataRaw.RawSample[12:]

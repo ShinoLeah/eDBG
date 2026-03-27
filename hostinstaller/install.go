@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -59,17 +60,15 @@ func RenderExamples(serverName string, serverURL string) string {
 		},
 	}
 	vscode := map[string]interface{}{
-		"mcp": map[string]interface{}{
-			"servers": map[string]interface{}{
-				serverName: defaultServerEntry("VS Code", serverURL),
-			},
+		"servers": map[string]interface{}{
+			serverName: defaultServerEntry("VS Code", serverURL),
 		},
 	}
 
 	var builder strings.Builder
 	builder.WriteString("Claude / Cursor / Claude Code style JSON:\n")
 	builder.WriteString(prettyJSON(generic))
-	builder.WriteString("\n\nVS Code settings.json style JSON:\n")
+	builder.WriteString("\n\nVS Code mcp.json style JSON:\n")
 	builder.WriteString(prettyJSON(vscode))
 	builder.WriteString("\n\nOpencode style JSON:\n")
 	builder.WriteString(prettyJSON(opencode))
@@ -174,7 +173,7 @@ func installClient(location ConfigLocation, client string, options InstallOption
 		return err
 	}
 	if client == "Codex" {
-		return installCodexToml(filepath.Join(location.Dir, location.File), options.ServerName, options.ServerURL)
+		return installCodex(filepath.Join(location.Dir, location.File), options.ServerName, options.ServerURL)
 	}
 	return installJSON(filepath.Join(location.Dir, location.File), client, options, specialStructuresForScope(options.Project))
 }
@@ -188,7 +187,7 @@ func uninstallClient(location ConfigLocation, client string, options InstallOpti
 		return err
 	}
 	if client == "Codex" {
-		return uninstallCodexToml(target, options.ServerName)
+		return uninstallCodex(target, options.ServerName)
 	}
 	return uninstallJSON(target, client, options.ServerName, specialStructuresForScope(options.Project))
 }
@@ -248,6 +247,24 @@ func defaultServerEntry(client string, serverURL string) map[string]interface{} 
 		return map[string]interface{}{
 			"type": "remote",
 			"url":  serverURL,
+		}
+	case "Cline":
+		return map[string]interface{}{
+			"type": "streamableHttp",
+			"url":  serverURL,
+		}
+	case "Roo Code", "Kilo Code":
+		return map[string]interface{}{
+			"type": "streamable-http",
+			"url":  serverURL,
+		}
+	case "Windsurf":
+		return map[string]interface{}{
+			"serverUrl": serverURL,
+		}
+	case "Warp", "Zed":
+		return map[string]interface{}{
+			"url": serverURL,
 		}
 	default:
 		return map[string]interface{}{
@@ -311,6 +328,16 @@ func installCodexToml(path string, serverName string, serverURL string) error {
 	return os.WriteFile(path, []byte(updated), 0o644)
 }
 
+func installCodex(path string, serverName string, serverURL string) error {
+	if shouldUseCodexCLI(path) {
+		if err := runCodexCLI("mcp", "add", serverName, "--url", serverURL); err != nil {
+			return err
+		}
+		return nil
+	}
+	return installCodexToml(path, serverName, serverURL)
+}
+
 func uninstallCodexToml(path string, serverName string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -326,6 +353,54 @@ func uninstallCodexToml(path string, serverName string) error {
 		updated += "\n"
 	}
 	return os.WriteFile(path, []byte(updated), 0o644)
+}
+
+func uninstallCodex(path string, serverName string) error {
+	if shouldUseCodexCLI(path) {
+		if err := runCodexCLI("mcp", "remove", serverName); err != nil {
+			return err
+		}
+		return nil
+	}
+	return uninstallCodexToml(path, serverName)
+}
+
+func shouldUseCodexCLI(configPath string) bool {
+	if _, err := exec.LookPath("codex"); err != nil {
+		return false
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	defaultPath := filepath.Join(home, ".codex", "config.toml")
+	return samePath(configPath, defaultPath)
+}
+
+func samePath(left string, right string) bool {
+	leftAbs, err := filepath.Abs(left)
+	if err != nil {
+		return false
+	}
+	rightAbs, err := filepath.Abs(right)
+	if err != nil {
+		return false
+	}
+	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
+}
+
+func runCodexCLI(args ...string) error {
+	cmd := exec.Command("codex", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			return fmt.Errorf("codex %s failed: %w", strings.Join(args, " "), err)
+		}
+		return fmt.Errorf("codex %s failed: %s", strings.Join(args, " "), message)
+	}
+	return nil
 }
 
 func removeCodexTomlSection(content string, serverName string) string {

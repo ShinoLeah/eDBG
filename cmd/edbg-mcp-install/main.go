@@ -94,7 +94,7 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("Notes:")
 	fmt.Println("  1. Start phone-side eDBG with --mcp.")
-	fmt.Println("  2. Run adb forward tcp:19810 tcp:19810 (or match your custom port).")
+	fmt.Println("  2. Run adb forward tcp:19810 tcp:19810 (or any local host port you prefer).")
 	fmt.Println("  3. Install client configs so they point to the forwarded MCP URL.")
 }
 

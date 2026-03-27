@@ -1,6 +1,5 @@
 assets/
 bin/
-dist/
 .gocache-installer/
 .VSCodeCounter/
 command

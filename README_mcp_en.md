@@ -22,7 +22,7 @@ adb push eDBG /data/local/tmp
 adb shell
 su
 chmod +x /data/local/tmp/eDBG
-/data/local/tmp/eDBG -p com.package.name -l libname.so --mcp
+/data/local/tmp/eDBG --mcp
 ```
 
 If `--mcp-port` is not specified, eDBG listens on `19810`.
@@ -38,18 +38,24 @@ adb forward tcp:19810 tcp:19810
 - `--mcp` forces `-prefer uprobe -show-vertual`.
 - No startup breakpoint is installed automatically
 - eDBG starts in standby mode and does not launch the target app by itself
-- In standby, only `break`, `info_break`, `info_file`, breakpoint management, and `run` are allowed
+- In the initial standby state there is no selected target yet, so the first safe step is `attach(package, library)`
+- After a target is selected but before the app is launched, only `attach`, `break`, `info_break`, `info_file`, breakpoint management, and `run` are allowed
 - The MCP `break` tool always interprets the offset as a virtual offset and maps internally to `vbreak`
+- `attach` selects the current `package` and `library`
+- `run` directly launch the attached target app with `am start`
 - `continue` blocks until a breakpoint is actually hit
+- `quit` only resets the current MCP context and returns to the initial standby state; it does not stop the MCP server
 
 Recommended flow:
 
-1. Start phone-side `eDBG --mcp`
-2. Run `adb forward tcp:19810 tcp:19810`
-3. Install MCP config into your AI client
-4. Use `break`
-5. Use `run`
-6. Use `continue`
+```text
+1. Start eDBG: /data/local/tmp/eDBG --mcp
+2. Forward the port: adb forward tcp:19810 tcp:19810
+3. Call attach(package, library) to select the target
+4. Call break to add virtual-offset breakpoints
+5. Call run to launch the app
+6. Call continue and wait for a breakpoint hit
+```
 
 ## Building The Installer
 
@@ -63,7 +69,7 @@ make -f Makefile_installer all
 Artifacts are written to:
 
 ```text
-dist/installer/
+bin/
 ```
 
 By default, it builds installer binaries for these mainstream desktop targets:
@@ -78,24 +84,24 @@ By default, it builds installer binaries for these mainstream desktop targets:
 ## Installer Usage
 
 ```shell
-./dist/installer/edbg-mcp-install --list-clients
-./dist/installer/edbg-mcp-install --install
-./dist/installer/edbg-mcp-install --install --clients codex,cursor,claude
-./dist/installer/edbg-mcp-install --project --install --clients cursor,vscode,zed
-./dist/installer/edbg-mcp-install --config
+./bin/edbg-mcp-install --list-clients
+./bin/edbg-mcp-install --install
+./bin/edbg-mcp-install --install --clients codex,cursor,claude
+./bin/edbg-mcp-install --project --install --clients cursor,vscode,zed
+./bin/edbg-mcp-install --config
 ```
 
-If you use a non-default forwarded port:
+If you change `--mcp-port`, or use a different local forwarded port:
 
 ```shell
-./dist/installer/edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
+./bin/edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
 ```
 
 To remove installed config:
 
 ```shell
-./dist/installer/edbg-mcp-install --uninstall
-./dist/installer/edbg-mcp-install --uninstall --clients codex,cursor
+./bin/edbg-mcp-install --uninstall
+./bin/edbg-mcp-install --uninstall --clients codex,cursor
 ```
 
 ## Supported AI Clients
@@ -103,7 +109,7 @@ To remove installed config:
 You can always inspect the live list with:
 
 ```shell
-./dist/installer/edbg-mcp-install --list-clients
+./bin/edbg-mcp-install --list-clients
 ```
 
 The current implementation covers major clients such as:
@@ -137,4 +143,3 @@ The current implementation covers major clients such as:
 - Use `--project` for clients that support project-level MCP configuration
 - Global installation only updates clients whose config directory already exists, to avoid polluting unrelated environments
 - `Codex` is written into `~/.codex/config.toml`
-

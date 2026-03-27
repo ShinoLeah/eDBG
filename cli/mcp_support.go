@@ -57,6 +57,34 @@ func (this *Client) IsMCPMode() bool {
 	return this.MCP.mode
 }
 
+func (this *Client) HasTarget() bool {
+	return this.Process != nil && this.Library != nil && this.BrkManager != nil
+}
+
+func (this *Client) SetTarget(process *controller.Process, library *controller.LibraryInfo) {
+	this.Process = process
+	this.Library = library
+	if this.BrkManager != nil {
+		this.BrkManager.SetProcess(process)
+	}
+	this.ResetMCPState()
+}
+
+func (this *Client) ClearTarget() {
+	this.Process = nil
+	this.Library = nil
+	this.PreviousCMD = ""
+	if this.Config != nil {
+		this.Config.ThreadFilters = nil
+		this.Config.Display = nil
+	}
+	if this.BrkManager != nil {
+		this.BrkManager.SetProcess(nil)
+		this.BrkManager.Reset()
+	}
+	this.ResetMCPState()
+}
+
 func (this *Client) ShouldSuppressOutput() bool {
 	this.MCP.mu.Lock()
 	defer this.MCP.mu.Unlock()
@@ -85,6 +113,17 @@ func (this *Client) MarkRunning() {
 	this.MCP.mu.Lock()
 	defer this.MCP.mu.Unlock()
 	this.MCP.stopped = false
+}
+
+func (this *Client) ResetMCPState() {
+	this.MCP.mu.Lock()
+	defer this.MCP.mu.Unlock()
+	this.MCP.runIssued = false
+	this.MCP.stopped = false
+	this.MCP.stopSeq = 0
+	this.MCP.lastStop = nil
+	close(this.MCP.notifyCh)
+	this.MCP.notifyCh = make(chan struct{})
 }
 
 func (this *Client) CurrentStopSequence() uint64 {

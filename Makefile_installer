@@ -1,5 +1,5 @@
 CMD_GO ?= go
-DIST_DIR ?= dist/installer
+BIN_DIR ?= bin
 INSTALLER_NAME ?= edbg-mcp-install
 GOCACHE ?= $(CURDIR)/.gocache-installer
 
@@ -12,40 +12,40 @@ PLATFORM_IDS := \
 	windows_arm64
 
 NON_WINDOWS_OUTPUTS := \
-	$(DIST_DIR)/$(INSTALLER_NAME)_darwin_amd64 \
-	$(DIST_DIR)/$(INSTALLER_NAME)_darwin_arm64 \
-	$(DIST_DIR)/$(INSTALLER_NAME)_linux_amd64 \
-	$(DIST_DIR)/$(INSTALLER_NAME)_linux_arm64
+	$(BIN_DIR)/$(INSTALLER_NAME)_darwin_amd64 \
+	$(BIN_DIR)/$(INSTALLER_NAME)_darwin_arm64 \
+	$(BIN_DIR)/$(INSTALLER_NAME)_linux_amd64 \
+	$(BIN_DIR)/$(INSTALLER_NAME)_linux_arm64
 
 WINDOWS_OUTPUTS := \
-	$(DIST_DIR)/$(INSTALLER_NAME)_windows_amd64.exe \
-	$(DIST_DIR)/$(INSTALLER_NAME)_windows_arm64.exe
+	$(BIN_DIR)/$(INSTALLER_NAME)_windows_amd64.exe \
+	$(BIN_DIR)/$(INSTALLER_NAME)_windows_arm64.exe
 
 .PHONY: all current clean list
 
 all: $(NON_WINDOWS_OUTPUTS) $(WINDOWS_OUTPUTS)
 
 current:
-	@mkdir -p $(DIST_DIR)
-	CGO_ENABLED=0 GOCACHE=$(GOCACHE) $(CMD_GO) build -o $(DIST_DIR)/$(INSTALLER_NAME) ./cmd/edbg-mcp-install
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 GOCACHE=$(GOCACHE) $(CMD_GO) build -o $(BIN_DIR)/$(INSTALLER_NAME) ./cmd/edbg-mcp-install
 
 clean:
-	rm -rf $(DIST_DIR)
+	rm -f $(BIN_DIR)/$(INSTALLER_NAME) $(NON_WINDOWS_OUTPUTS) $(WINDOWS_OUTPUTS)
 
 list:
 	@printf '%s\n' $(PLATFORM_IDS)
 
-$(DIST_DIR)/$(INSTALLER_NAME)_%:
-	@mkdir -p $(DIST_DIR)
+$(BIN_DIR)/$(INSTALLER_NAME)_%:
+	@mkdir -p $(BIN_DIR)
 	$(eval PLATFORM := $(subst _,/,$*))
 	$(eval GOOS := $(word 1,$(subst /, ,$(PLATFORM))))
 	$(eval GOARCH := $(word 2,$(subst /, ,$(PLATFORM))))
 	CGO_ENABLED=0 GOCACHE=$(GOCACHE) GOOS=$(GOOS) GOARCH=$(GOARCH) $(CMD_GO) build -o $@ ./cmd/edbg-mcp-install
 
-$(DIST_DIR)/$(INSTALLER_NAME)_windows_amd64.exe:
-	@mkdir -p $(DIST_DIR)
+$(BIN_DIR)/$(INSTALLER_NAME)_windows_amd64.exe:
+	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 GOCACHE=$(GOCACHE) GOOS=windows GOARCH=amd64 $(CMD_GO) build -o $@ ./cmd/edbg-mcp-install
 
-$(DIST_DIR)/$(INSTALLER_NAME)_windows_arm64.exe:
-	@mkdir -p $(DIST_DIR)
+$(BIN_DIR)/$(INSTALLER_NAME)_windows_arm64.exe:
+	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 GOCACHE=$(GOCACHE) GOOS=windows GOARCH=arm64 $(CMD_GO) build -o $@ ./cmd/edbg-mcp-install

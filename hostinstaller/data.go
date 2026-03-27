@@ -71,12 +71,14 @@ var projectLevelConfigs = map[string]ConfigLocation{
 var projectSpecialJSONStructures = map[string]SpecialJSONStructure{
 	"VS Code":          {TopKey: "", NestedKey: "servers"},
 	"VS Code Insiders": {TopKey: "", NestedKey: "servers"},
+	"Zed":              {TopKey: "", NestedKey: "context_servers"},
 }
 
 var globalSpecialJSONStructures = map[string]SpecialJSONStructure{
-	"VS Code":          {TopKey: "mcp", NestedKey: "servers"},
-	"VS Code Insiders": {TopKey: "mcp", NestedKey: "servers"},
+	"VS Code":          {TopKey: "", NestedKey: "servers"},
+	"VS Code Insiders": {TopKey: "", NestedKey: "servers"},
 	"Opencode":         {TopKey: "", NestedKey: "mcp"},
+	"Zed":              {TopKey: "", NestedKey: "context_servers"},
 }
 
 func GlobalConfigs() map[string]ConfigLocation {
@@ -103,12 +105,12 @@ func GlobalConfigs() map[string]ConfigLocation {
 			"Augment Code":     {Dir: filepath.Join(appSupport, "Code", "User"), File: "settings.json"},
 			"Qodo Gen":         {Dir: filepath.Join(appSupport, "Code", "User"), File: "settings.json"},
 			"Warp":             {Dir: filepath.Join(home, ".warp"), File: "mcp_config.json"},
-			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp_config.json"},
+			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp.json"},
 			"Opencode":         {Dir: filepath.Join(home, ".config", "opencode"), File: "opencode.json"},
-			"Kiro":             {Dir: filepath.Join(home, ".kiro"), File: "mcp_config.json"},
+			"Kiro":             {Dir: filepath.Join(home, ".kiro", "settings"), File: "mcp.json"},
 			"Trae":             {Dir: filepath.Join(home, ".trae"), File: "mcp_config.json"},
-			"VS Code":          {Dir: filepath.Join(appSupport, "Code", "User"), File: "settings.json"},
-			"VS Code Insiders": {Dir: filepath.Join(appSupport, "Code - Insiders", "User"), File: "settings.json"},
+			"VS Code":          {Dir: filepath.Join(appSupport, "Code", "User"), File: "mcp.json"},
+			"VS Code Insiders": {Dir: filepath.Join(appSupport, "Code - Insiders", "User"), File: "mcp.json"},
 		}
 	case "linux":
 		return map[string]ConfigLocation{
@@ -128,12 +130,12 @@ func GlobalConfigs() map[string]ConfigLocation {
 			"Augment Code":     {Dir: filepath.Join(home, ".config", "Code", "User"), File: "settings.json"},
 			"Qodo Gen":         {Dir: filepath.Join(home, ".config", "Code", "User"), File: "settings.json"},
 			"Warp":             {Dir: filepath.Join(home, ".warp"), File: "mcp_config.json"},
-			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp_config.json"},
+			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp.json"},
 			"Opencode":         {Dir: filepath.Join(home, ".config", "opencode"), File: "opencode.json"},
-			"Kiro":             {Dir: filepath.Join(home, ".kiro"), File: "mcp_config.json"},
+			"Kiro":             {Dir: filepath.Join(home, ".kiro", "settings"), File: "mcp.json"},
 			"Trae":             {Dir: filepath.Join(home, ".trae"), File: "mcp_config.json"},
-			"VS Code":          {Dir: filepath.Join(home, ".config", "Code", "User"), File: "settings.json"},
-			"VS Code Insiders": {Dir: filepath.Join(home, ".config", "Code - Insiders", "User"), File: "settings.json"},
+			"VS Code":          {Dir: filepath.Join(home, ".config", "Code", "User"), File: "mcp.json"},
+			"VS Code Insiders": {Dir: filepath.Join(home, ".config", "Code - Insiders", "User"), File: "mcp.json"},
 		}
 	case "windows":
 		appData := os.Getenv("APPDATA")
@@ -155,12 +157,12 @@ func GlobalConfigs() map[string]ConfigLocation {
 			"Augment Code":     {Dir: filepath.Join(appData, "Code", "User"), File: "settings.json"},
 			"Qodo Gen":         {Dir: filepath.Join(appData, "Code", "User"), File: "settings.json"},
 			"Warp":             {Dir: filepath.Join(home, ".warp"), File: "mcp_config.json"},
-			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp_config.json"},
+			"Amazon Q":         {Dir: filepath.Join(home, ".aws", "amazonq"), File: "mcp.json"},
 			"Opencode":         {Dir: filepath.Join(home, ".config", "opencode"), File: "opencode.json"},
-			"Kiro":             {Dir: filepath.Join(home, ".kiro"), File: "mcp_config.json"},
+			"Kiro":             {Dir: filepath.Join(home, ".kiro", "settings"), File: "mcp.json"},
 			"Trae":             {Dir: filepath.Join(home, ".trae"), File: "mcp_config.json"},
-			"VS Code":          {Dir: filepath.Join(appData, "Code", "User"), File: "settings.json"},
-			"VS Code Insiders": {Dir: filepath.Join(appData, "Code - Insiders", "User"), File: "settings.json"},
+			"VS Code":          {Dir: filepath.Join(appData, "Code", "User"), File: "mcp.json"},
+			"VS Code Insiders": {Dir: filepath.Join(appData, "Code - Insiders", "User"), File: "mcp.json"},
 		}
 	default:
 		return map[string]ConfigLocation{}

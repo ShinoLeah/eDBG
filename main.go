@@ -114,6 +114,7 @@ func main() {
 		// vertual			bool
 	)
 	var brkFlag string
+	var err error
 	doupdate = false
 	proxy = false
 	flag.StringVar(&brkFlag, "b", "", "Breakpoint addresses in hex format, e.g., [0x1234,0x5678]")
@@ -174,26 +175,17 @@ func main() {
 
 		fmt.Printf("Using Config from: %s\n", inputfile)
 	}
-	if packageName == "" {
-		fmt.Println("No Package Specified. Use -p com.package.name")
-		os.Exit(1)
+	hasInitialTarget := packageName != "" || libName != ""
+	if !mcpMode || hasInitialTarget {
+		if packageName == "" {
+			fmt.Println("No Package Specified. Use -p com.package.name")
+			os.Exit(1)
+		}
+		if libName == "" {
+			fmt.Println("No Library Specified. Use -l libraryname.so")
+			os.Exit(1)
+		}
 	}
-
-	process, err := controller.CreateProcess(packageName)
-	if err != nil {
-		fmt.Println("Create process error: ", err)
-		os.Exit(1)
-	}
-	if libName == "" {
-		fmt.Println("No Library Specified. Use -l libraryname.so")
-		os.Exit(1)
-	}
-	library, err := controller.CreateLibrary(process, libName)
-	if err != nil {
-		fmt.Println("Create Library error: ", err)
-		os.Exit(1)
-	}
-	workedlib[libName] = library
 
 	btfFile := ""
 	if !utils.CheckConfig("CONFIG_DEBUG_INFO_BTF=y") {
@@ -223,6 +215,23 @@ func main() {
 		config.Preference = config.ALL_UPROBE
 		config.Available_HW = 0
 	}
+
+	var process *controller.Process
+	var library *controller.LibraryInfo
+	if !mcpMode || hasInitialTarget {
+		process, err = controller.CreateProcess(packageName)
+		if err != nil {
+			fmt.Println("Create process error: ", err)
+			os.Exit(1)
+		}
+		library, err = controller.CreateLibrary(process, libName)
+		if err != nil {
+			fmt.Println("Create Library error: ", err)
+			os.Exit(1)
+		}
+		workedlib[libName] = library
+	}
+
 	eventListener := event.CreateEventListener(process)
 	brkManager := module.CreateBreakPointManager(eventListener, btfFile, process)
 	client := cli.CreateClient(process, library, brkManager, &cli.UserConfig{
@@ -232,7 +241,7 @@ func main() {
 	if mcpMode {
 		client.EnableMCPMode()
 	}
-	if inputfile == "" || mcpMode {
+	if (inputfile == "" || mcpMode) && library != nil {
 		var brkAddrs []uint64
 		var err error
 
@@ -278,7 +287,7 @@ func main() {
 		for _, offset := range brkAddrs {
 			brkAddressInfos = append(brkAddressInfos, controller.NewAddress(library, offset))
 		}
-	} else {
+	} else if inputfile != "" && library != nil {
 		Config, _ := LoadConfig(inputfile)
 		for _, name := range Config.TNames {
 			client.AddThreadFilterName(name)
@@ -322,12 +331,12 @@ func main() {
 		client.Run()
 		eventListener.Run()
 
-		server = mcpserver.NewServer(client, packageName, libName)
-		addr := fmt.Sprintf("127.0.0.1:%d", mcpPort)
+		server = mcpserver.NewServer(client)
+		addr := fmt.Sprintf("0.0.0.0:%d", mcpPort)
 		go func() {
 			serverErr <- server.Serve(addr)
 		}()
-		fmt.Printf("MCP server listening on %s. Use adb forward tcp:%d tcp:%d\n", addr, mcpPort, mcpPort)
+		fmt.Printf("MCP server listening on %s. Use adb forward tcp:%d tcp:%d and connect from the host with http://127.0.0.1:%d/mcp\n", addr, mcpPort, mcpPort, mcpPort)
 		select {
 		case <-stopper:
 		case err := <-serverErr:
@@ -359,7 +368,9 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}
-	process.Continue()
+	if client.Process != nil {
+		_ = client.Process.Continue()
+	}
 	// _ = brkManager.Stop()
 	if save {
 		if inputfile == "" {
