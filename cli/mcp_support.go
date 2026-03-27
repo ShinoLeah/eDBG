@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"eDBG/controller"
 	"eDBG/utils"
 	"fmt"
@@ -115,6 +116,13 @@ func (this *Client) MarkRunning() {
 	this.MCP.stopped = false
 }
 
+func (this *Client) MarkStandby() {
+	this.MCP.mu.Lock()
+	defer this.MCP.mu.Unlock()
+	this.MCP.runIssued = false
+	this.MCP.stopped = false
+}
+
 func (this *Client) ResetMCPState() {
 	this.MCP.mu.Lock()
 	defer this.MCP.mu.Unlock()
@@ -143,6 +151,10 @@ func (this *Client) LastStopInfo() *StopInfo {
 }
 
 func (this *Client) WaitForStopAfter(seq uint64, timeout time.Duration) (*StopInfo, error) {
+	return this.WaitForStopAfterContext(context.Background(), seq, timeout)
+}
+
+func (this *Client) WaitForStopAfterContext(ctx context.Context, seq uint64, timeout time.Duration) (*StopInfo, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		this.MCP.mu.Lock()
@@ -161,6 +173,8 @@ func (this *Client) WaitForStopAfter(seq uint64, timeout time.Duration) (*StopIn
 
 		select {
 		case <-waitCh:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		case <-time.After(remaining):
 			return nil, fmt.Errorf("timed out waiting for a breakpoint after %s", timeout)
 		}

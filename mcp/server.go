@@ -25,7 +25,8 @@ import (
 const (
 	defaultProtocolVersion = "2025-03-26"
 	sessionHeaderName      = "Mcp-Session-Id"
-	defaultContinueTimeout = 10 * time.Minute
+	defaultContinueTimeout = 90 * time.Second
+	maxContinueTimeout     = 90 * time.Second
 	guideResourceURI       = "edbg://guide/mcp"
 	statusResourceURI      = "edbg://runtime/status"
 )
@@ -257,7 +258,7 @@ func (this *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 			"resourceTemplates": []map[string]interface{}{},
 		})
 	case "tools/call":
-		this.handleToolCall(w, req)
+		this.handleToolCall(w, r, req)
 	default:
 		this.writeRPCError(w, req.ID, -32601, "method not found")
 	}
@@ -300,7 +301,7 @@ func (this *Server) handleInitialize(w http.ResponseWriter, req rpcRequest) {
 	})
 }
 
-func (this *Server) handleToolCall(w http.ResponseWriter, req rpcRequest) {
+func (this *Server) handleToolCall(w http.ResponseWriter, httpReq *http.Request, req rpcRequest) {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -325,7 +326,7 @@ func (this *Server) handleToolCall(w http.ResponseWriter, req rpcRequest) {
 	this.toolMu.Lock()
 	defer this.toolMu.Unlock()
 
-	toolResult, err := this.callTool(params.Name, args)
+	toolResult, err := this.callTool(httpReq.Context(), params.Name, args)
 	if toolResult == nil {
 		toolResult = this.errorToolResult(params.Name, "internal_error", "tool returned no result", nil, nil, nil)
 	}
@@ -340,7 +341,9 @@ func (this *Server) handleToolCall(w http.ResponseWriter, req rpcRequest) {
 			},
 		},
 	}
-	if err != nil {
+	if okValue, ok := toolResult["ok"].(bool); ok && !okValue {
+		result["isError"] = true
+	} else if err != nil {
 		result["isError"] = true
 	}
 
@@ -378,7 +381,7 @@ func (this *Server) handleResourceRead(w http.ResponseWriter, req rpcRequest) {
 	})
 }
 
-func (this *Server) callTool(name string, args map[string]interface{}) (map[string]interface{}, error) {
+func (this *Server) callTool(ctx context.Context, name string, args map[string]interface{}) (map[string]interface{}, error) {
 	if !this.client.HasTarget() && name != "attach" && name != "status" {
 		return this.errorToolResult(
 			name,
@@ -497,12 +500,22 @@ func (this *Server) callTool(name string, args map[string]interface{}) (map[stri
 		}
 		return this.successToolResult(name, "Thread info.", data, nil, nil), nil
 	case "run":
-		return this.handleRun(args)
+		return this.handleRun(ctx, args)
 	case "continue":
 		if err := this.requireTarget("continue"); err != nil {
 			return this.wrapToolError(name, "invalid_state", err.Error(), nil, nil), err
 		}
-		return this.handleContinue(args)
+		return this.handleContinue(ctx, args)
+	case "wait_stop":
+		if err := this.requireTarget("wait_stop"); err != nil {
+			return this.wrapToolError(name, "invalid_state", err.Error(), nil, nil), err
+		}
+		return this.handleWaitStop(ctx, args)
+	case "cancel_run":
+		if err := this.requireTarget("cancel_run"); err != nil {
+			return this.wrapToolError(name, "invalid_state", err.Error(), nil, nil), err
+		}
+		return this.handleCancelRun()
 	case "examine":
 		if err := this.requireStopped("examine"); err != nil {
 			return this.wrapToolError(name, "invalid_state", err.Error(), nil, nil), err
@@ -639,7 +652,7 @@ func (this *Server) callTool(name string, args map[string]interface{}) (map[stri
 	}
 }
 
-func (this *Server) handleRun(args map[string]interface{}) (map[string]interface{}, error) {
+func (this *Server) handleRun(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 	if optionalStringArg(args, "package", "") != "" ||
 		optionalStringArg(args, "package_name", "") != "" ||
 		optionalStringArg(args, "library", "") != "" ||
@@ -670,10 +683,7 @@ func (this *Server) handleRun(args map[string]interface{}) (map[string]interface
 		return this.wrapToolError("run", "invalid_state", err.Error(), nil, []string{"Call quit and retry if the app cannot be stopped cleanly."}), err
 	}
 
-	timeout := defaultContinueTimeout
-	if timeoutMS, ok := optionalIntArg(args, "timeout_ms"); ok && timeoutMS > 0 {
-		timeout = time.Duration(timeoutMS) * time.Millisecond
-	}
+	timeout := effectiveWaitTimeout(args)
 
 	seq := this.client.CurrentStopSequence()
 	var continueErr error
@@ -690,35 +700,34 @@ func (this *Server) handleRun(args map[string]interface{}) (map[string]interface
 	activity := optionalStringArg(args, "activity", "")
 	output, err := this.launchApp(activity)
 	if err != nil {
-		this.client.SetRunIssued(false)
+		if this.client.BrkManager != nil && this.client.BrkManager.Running {
+			_ = this.client.BrkManager.Stop()
+		}
+		this.client.MarkStandby()
 		return this.wrapToolError("run", "runtime_error", err.Error(), []string{cleanText(output)}, nil), err
 	}
 
-	info, err := this.client.WaitForStopAfter(seq, timeout)
-	if err != nil {
-		return this.wrapToolError(
-			"run",
-			"timeout",
-			err.Error(),
-			[]string{
-				"The breakpoint may not have been hit.",
-				cleanText(output),
-			},
-			[]string{
-				"You can call quit, then attach again, set breakpoints again, and retry run.",
-			},
-		), err
-	}
-
-	data := map[string]interface{}{
+	launchData := map[string]interface{}{
 		"launch": map[string]interface{}{
 			"activity":      this.resolveActivityName(activity, output),
 			"am_start":      this.parseAmStartOutput(output),
 			"force_stopped": cleanText(forceStopOutput) == "",
 		},
-		"first_stop": this.stopInfoData(info),
 	}
-	return this.successToolResult("run", "App launched and first breakpoint hit.", data, nil, nil), nil
+	result, waitErr := this.waitForStop(ctx, "run", seq, timeout, launchData)
+	if waitErr != nil {
+		return result, waitErr
+	}
+	if okValue, ok := result["ok"].(bool); ok && okValue {
+		if data, ok := result["data"].(map[string]interface{}); ok {
+			if _, hasStop := data["stop"]; hasStop {
+				result["message"] = "App launched and first breakpoint hit."
+				data["first_stop"] = data["stop"]
+				delete(data, "stop")
+			}
+		}
+	}
+	return result, nil
 }
 
 func (this *Server) handleAttach(args map[string]interface{}) (map[string]interface{}, error) {
@@ -770,11 +779,22 @@ func (this *Server) renderStatus() string {
 	fmt.Fprintf(&builder, "Target Selected: %t\n", targetSelected)
 	fmt.Fprintf(&builder, "Target Stopped: %t\n", this.client.IsStopped())
 	fmt.Fprintf(&builder, "Run Issued: %t\n", this.client.HasRunIssued())
+	fmt.Fprintf(&builder, "Probe Running: %t\n", this.client.BrkManager != nil && this.client.BrkManager.Running)
 	fmt.Fprintf(&builder, "Enabled Breakpoints: %d\n", this.enabledBreakpointCount())
 
 	if targetSelected {
+		processData := this.processRuntimeData()
 		fmt.Fprintf(&builder, "Package: %s\n", this.client.Process.PackageName)
 		fmt.Fprintf(&builder, "Library: %s\n", this.client.Library.LibName)
+		if processStatus, ok := processData["status"].(string); ok {
+			fmt.Fprintf(&builder, "Process Status: %s\n", processStatus)
+		}
+		if pidList, ok := processData["pid_list"].([]uint32); ok {
+			fmt.Fprintf(&builder, "PIDs: %v\n", pidList)
+		}
+		if unexpectedExit, ok := processData["unexpected_exit"].(bool); ok && unexpectedExit {
+			builder.WriteString("Process Exit: target appears to have exited unexpectedly while eDBG was waiting.\n")
+		}
 	} else {
 		builder.WriteString("Package: (none)\n")
 		builder.WriteString("Library: (none)\n")
@@ -794,31 +814,32 @@ func (this *Server) renderStatus() string {
 	} else if !this.client.HasRunIssued() {
 		builder.WriteString("- Set breakpoints, then call run.\n")
 		builder.WriteString("- run will arm the probes, launch the app, and wait for the first breakpoint hit.\n")
+	} else if processStatus, ok := this.processRuntimeData()["status"].(string); ok && processStatus == "exited" {
+		builder.WriteString("- The target process is no longer running.\n")
+		builder.WriteString("- You can inspect status, then call cancel_run or quit before retrying.\n")
 	} else {
-		builder.WriteString("- Call continue to wait for the next breakpoint hit.\n")
+		builder.WriteString("- The target is currently running under probes.\n")
+		builder.WriteString("- Use wait_stop to keep waiting, cancel_run to stop waiting and return to standby, or quit to fully reset.\n")
 	}
 
 	return strings.TrimSpace(builder.String())
 }
 
-func (this *Server) handleContinue(args map[string]interface{}) (map[string]interface{}, error) {
+func (this *Server) handleContinue(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 	if !this.client.IsStopped() && !this.client.HasRunIssued() {
 		err := fmt.Errorf("continue is unavailable in standby before run; set breakpoints, launch the app with run, then continue")
 		return this.wrapToolError("continue", "invalid_state", err.Error(), nil, nil), err
 	}
 	if !this.client.IsStopped() && this.client.HasRunIssued() {
 		err := fmt.Errorf("continue is unavailable while the target is already running")
-		return this.wrapToolError("continue", "already_running", err.Error(), nil, []string{"Wait for the current run to stop, or call quit if you need to reset the session."}), err
+		return this.wrapToolError("continue", "already_running", err.Error(), nil, []string{"Use wait_stop to keep waiting for the current run, cancel_run to return to standby, or quit to fully reset the session."}), err
 	}
 	if !this.hasEnabledBreakpoints() {
 		err := fmt.Errorf("continue requires at least one enabled breakpoint")
 		return this.wrapToolError("continue", "invalid_state", err.Error(), nil, nil), err
 	}
 
-	timeout := defaultContinueTimeout
-	if timeoutMS, ok := optionalIntArg(args, "timeout_ms"); ok && timeoutMS > 0 {
-		timeout = time.Duration(timeoutMS) * time.Millisecond
-	}
+	timeout := effectiveWaitTimeout(args)
 
 	seq := this.client.CurrentStopSequence()
 
@@ -832,20 +853,101 @@ func (this *Server) handleContinue(args map[string]interface{}) (map[string]inte
 		return this.wrapToolError("continue", "runtime_error", continueErr.Error(), []string{cleanText(output)}, nil), continueErr
 	}
 
-	info, err := this.client.WaitForStopAfter(seq, timeout)
-	if err != nil {
-		return this.wrapToolError(
-			"continue",
-			"timeout",
-			err.Error(),
-			[]string{"The breakpoint may not have been hit."},
-			[]string{"You can call quit, then attach again, set breakpoints again, and retry run."},
-		), err
+	return this.waitForStop(ctx, "continue", seq, timeout, nil)
+}
+
+func (this *Server) handleWaitStop(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
+	if this.client.IsStopped() {
+		err := fmt.Errorf("wait_stop is unavailable while the target is already stopped")
+		return this.wrapToolError("wait_stop", "invalid_state", err.Error(), nil, []string{"Use the stopped-state inspection tools now, or call continue when you are ready to resume."}), err
+	}
+	if !this.client.HasRunIssued() {
+		err := fmt.Errorf("wait_stop is unavailable because no run is currently in progress")
+		return this.wrapToolError("wait_stop", "invalid_state", err.Error(), nil, []string{"Call run to launch the app, or call continue after a stopped breakpoint to resume execution."}), err
 	}
 
-	return this.successToolResult("continue", "Breakpoint hit.", map[string]interface{}{
+	timeout := effectiveWaitTimeout(args)
+
+	return this.waitForStop(ctx, "wait_stop", this.client.CurrentStopSequence(), timeout, nil)
+}
+
+func (this *Server) handleCancelRun() (map[string]interface{}, error) {
+	if !this.client.HasRunIssued() && (this.client.BrkManager == nil || !this.client.BrkManager.Running) {
+		return this.successToolResult("cancel_run", "No active run was in progress.", map[string]interface{}{
+			"cancelled": false,
+			"standby":   true,
+		}, nil, nil), nil
+	}
+
+	if this.client.BrkManager != nil && this.client.BrkManager.Running {
+		if err := this.client.BrkManager.Stop(); err != nil {
+			return this.wrapToolError("cancel_run", "runtime_error", err.Error(), nil, nil), err
+		}
+	}
+	if this.client.Process != nil {
+		_ = this.client.Process.Continue()
+	}
+	this.client.MarkStandby()
+
+	return this.successToolResult("cancel_run", "Current run cancelled. The session returned to standby.", map[string]interface{}{
+		"cancelled": true,
+		"standby":   true,
+	}, nil, []string{"Breakpoints and attach target were preserved. Call run to relaunch, or adjust breakpoints before the next run."}), nil
+}
+
+func (this *Server) waitForStop(ctx context.Context, tool string, seq uint64, timeout time.Duration, extra map[string]interface{}) (map[string]interface{}, error) {
+	info, err := this.client.WaitForStopAfterContext(ctx, seq, timeout)
+	if err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return this.wrapToolError(tool, "request_cancelled", "the MCP client cancelled the request while waiting for a breakpoint", nil, nil), err
+		}
+		processData := this.processRuntimeData()
+		processRunning, _ := processData["running"].(bool)
+		processStatus, _ := processData["status"].(string)
+		warnings := []string{"The wait window ended before a breakpoint was observed. If probes are still active, the app may still stop on a later breakpoint."}
+		suggestions := []string{
+			"Call wait_stop to continue waiting for the current run.",
+			"Call cancel_run to stop waiting and return to attach standby while preserving the target and breakpoints.",
+			"Call quit only if you want to fully reset the MCP debug session.",
+		}
+		message := "The wait window ended without a breakpoint hit. The target may still be running under eDBG."
+		if processStatus == "exited" {
+			message = "The wait window ended and the target process is no longer running."
+			warnings = []string{"The target process no longer appears in the process list while eDBG was waiting for a breakpoint."}
+			suggestions = []string{
+				"Check whether the app crashed or exited normally.",
+				"Call cancel_run to return to standby while preserving the current target and breakpoints.",
+				"Call run again after you are ready to relaunch the app.",
+			}
+		}
+		data := map[string]interface{}{
+			"timed_out":      true,
+			"still_running":  processRunning,
+			"probe_running":  this.client.BrkManager != nil && this.client.BrkManager.Running,
+			"timeout_ms":     timeout.Milliseconds(),
+			"max_timeout_ms": maxContinueTimeout.Milliseconds(),
+			"process":        processData,
+			"recovery_tools": []string{"wait_stop", "cancel_run", "quit"},
+		}
+		for key, value := range extra {
+			data[key] = value
+		}
+		return this.successToolResult(
+			tool,
+			message,
+			data,
+			warnings,
+			suggestions,
+		), nil
+	}
+
+	data := map[string]interface{}{
 		"stop": this.stopInfoData(info),
-	}, nil, nil), nil
+	}
+	for key, value := range extra {
+		data[key] = value
+	}
+	return this.successToolResult(tool, "Breakpoint hit.", data, nil, nil), nil
 }
 
 func (this *Server) renderBreakpoints() string {
@@ -1071,8 +1173,77 @@ func cleanStringList(values []string) []string {
 	return cleaned
 }
 
+func (this *Server) processRuntimeData() map[string]interface{} {
+	if !this.client.HasTarget() || this.client.Process == nil {
+		return map[string]interface{}{
+			"available": false,
+		}
+	}
+
+	process := this.client.Process
+	process.UpdatePidList()
+
+	pidList := make([]uint32, 0, len(process.PidList))
+	for _, pid := range process.PidList {
+		pidList = append(pidList, pid)
+	}
+
+	stoppedPIDs := make([]uint32, 0, len(process.StoppedPid))
+	seenStopped := make(map[uint32]bool)
+	for _, pid := range process.StoppedPid {
+		if seenStopped[pid] {
+			continue
+		}
+		seenStopped[pid] = true
+		stoppedPIDs = append(stoppedPIDs, pid)
+	}
+
+	running := len(pidList) > 0
+	probeRunning := this.client.BrkManager != nil && this.client.BrkManager.Running
+
+	status := "standby"
+	switch {
+	case this.client.IsStopped() && running:
+		status = "stopped"
+	case this.client.IsStopped() && !running:
+		status = "exited"
+	case this.client.HasRunIssued() && running:
+		status = "running"
+	case this.client.HasRunIssued() && !running:
+		status = "exited"
+	case running:
+		status = "running_unmanaged"
+	}
+
+	unexpectedExit := status == "exited" && this.client.HasRunIssued()
+
+	data := map[string]interface{}{
+		"available":        true,
+		"package":          process.PackageName,
+		"status":           status,
+		"running":          running,
+		"stopped":          this.client.IsStopped(),
+		"run_issued":       this.client.HasRunIssued(),
+		"probe_running":    probeRunning,
+		"pid_list":         pidList,
+		"pid_count":        len(pidList),
+		"stopped_pid_list": stoppedPIDs,
+		"work_pid":         process.WorkPid,
+		"work_tid":         process.WorkTid,
+		"unexpected_exit":  unexpectedExit,
+	}
+	if len(pidList) > 0 {
+		data["primary_pid"] = pidList[0]
+	}
+	if unexpectedExit {
+		data["exit_hint"] = "The target process is no longer running even though eDBG was waiting for a breakpoint. The app may have exited or crashed."
+	}
+	return data
+}
+
 func (this *Server) stateSnapshot() map[string]interface{} {
 	phase := "idle"
+	processData := this.processRuntimeData()
 	if this.client.HasTarget() {
 		switch {
 		case this.client.IsStopped():
@@ -1089,12 +1260,19 @@ func (this *Server) stateSnapshot() map[string]interface{} {
 		"target_selected":          this.client.HasTarget(),
 		"stopped":                  this.client.IsStopped(),
 		"run_issued":               this.client.HasRunIssued(),
+		"probe_running":            this.client.BrkManager != nil && this.client.BrkManager.Running,
 		"breakpoint_count":         len(this.breakpointListData()),
 		"enabled_breakpoint_count": this.enabledBreakpointCount(),
 	}
 	if this.client.HasTarget() {
 		state["package"] = this.client.Process.PackageName
 		state["library"] = this.client.Library.LibName
+		state["process"] = processData
+		if processStatus, ok := processData["status"].(string); ok {
+			state["process_status"] = processStatus
+			state["process_running"] = processData["running"]
+			state["unexpected_exit"] = processData["unexpected_exit"]
+		}
 	}
 	if lastStop := this.client.LastStopInfo(); lastStop != nil {
 		state["last_stop"] = this.stopInfoData(lastStop)
@@ -1107,6 +1285,8 @@ func (this *Server) statusData() map[string]interface{} {
 		"protocol_version":    defaultProtocolVersion,
 		"guide_resource_uri":  guideResourceURI,
 		"status_resource_uri": statusResourceURI,
+		"probe_running":       this.client.BrkManager != nil && this.client.BrkManager.Running,
+		"process":             this.processRuntimeData(),
 		"breakpoints":         this.breakpointListData(),
 	}
 	if lastStop := this.client.LastStopInfo(); lastStop != nil {
@@ -1636,6 +1816,17 @@ func optionalIntArgValue(args map[string]interface{}, key string, fallback int) 
 	return fallback
 }
 
+func effectiveWaitTimeout(args map[string]interface{}) time.Duration {
+	timeout := defaultContinueTimeout
+	if timeoutMS, ok := optionalIntArg(args, "timeout_ms"); ok && timeoutMS > 0 {
+		timeout = time.Duration(timeoutMS) * time.Millisecond
+	}
+	if timeout > maxContinueTimeout {
+		timeout = maxContinueTimeout
+	}
+	return timeout
+}
+
 func (this *Server) parseRuntimeAddress(arg string) (uint64, error) {
 	address, err := this.client.ParseUserAddressToAbsolute(arg)
 	if err == nil {
@@ -1824,7 +2015,7 @@ func (this *Server) toolDefinitions() []map[string]interface{} {
 				},
 				"timeout_ms": map[string]interface{}{
 					"type":        "integer",
-					"description": "可选。run 内部等待首次断点命中的最长时间，默认 600000 毫秒。",
+					"description": "可选。run 内部等待首次断点命中的最长时间；服务端当前默认且最大都为 90000 毫秒，以确保在 MCP 客户端超时之前返回结果。",
 				},
 			},
 		}),
@@ -1833,10 +2024,20 @@ func (this *Server) toolDefinitions() []map[string]interface{} {
 			"properties": map[string]interface{}{
 				"timeout_ms": map[string]interface{}{
 					"type":        "integer",
-					"description": "可选。最长等待时间，默认 600000 毫秒。",
+					"description": "可选。最长等待时间；服务端当前默认且最大都为 90000 毫秒，以确保在 MCP 客户端超时之前返回结果。",
 				},
 			},
 		}),
+		toolDefinition("wait_stop", "当目标已经在运行中时，继续等待当前这次运行命中断点，不会再次发送 continue。适合在 continue/run 超时后继续接管当前会话。", map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"timeout_ms": map[string]interface{}{
+					"type":        "integer",
+					"description": "可选。最长等待时间；服务端当前默认且最大都为 90000 毫秒，以确保在 MCP 客户端超时之前返回结果。",
+				},
+			},
+		}),
+		toolDefinition("cancel_run", "取消当前正在等待的运行，停止探针并回到 attach 后的待命状态，同时保留当前 target 和断点。", emptySchema()),
 		toolDefinition("examine", "读取内存，仅在 attach 且断点命中后可用。", map[string]interface{}{
 			"type":     "object",
 			"required": []string{"address"},
@@ -1933,16 +2134,24 @@ This server exposes all tool capabilities up front so the agent can plan, but th
 3. Before attach succeeds, every other debug tool will return a guidance message instead of executing.
 4. After attach, use break to add virtual-offset breakpoints.
 5. Use run to arm the probes, launch the app with am start, and wait for the first breakpoint hit. run does not accept package or library; use attach for target selection.
-6. After the first stop, use continue to wait for later breakpoint hits.
-7. Stopped-only tools become available only after a breakpoint has been hit: info_register, info_thread, examine, list, backtrace, thread, set_symbol, write_memory, dump.
-8. quit resets the current debug context but keeps the MCP server running.
+6. After the first stop, use continue to resume execution and wait for later breakpoint hits.
+7. If run or continue times out, the target may still be running under eDBG. In that case, use wait_stop to keep waiting for the current run, or cancel_run to return to standby without losing attach state and breakpoints.
+8. Stopped-only tools become available only after a breakpoint has been hit: info_register, info_thread, examine, list, backtrace, thread, set_symbol, write_memory, dump.
+9. quit resets the current debug context but keeps the MCP server running.
 
 Tool policy summary:
 - Always safe: status, attach
-- Requires attach: break, enable_breakpoint, disable_breakpoint, delete_breakpoint, info_break, info_file, run, continue, quit
+- Requires attach: break, enable_breakpoint, disable_breakpoint, delete_breakpoint, info_break, info_file, run, continue, wait_stop, cancel_run, quit
 - Requires attach and a breakpoint hit: info_register, info_thread, examine, list, backtrace, thread, set_symbol, write_memory, dump
 
-The break tool uses virtual offsets, equivalent to eDBG vbreak.`)
+The break tool uses virtual offsets, equivalent to eDBG vbreak.
+
+Process status meanings:
+- standby: target is attached, but no run is currently in progress and the target is not stopped on a breakpoint.
+- running: target process is alive and eDBG is currently waiting for a breakpoint.
+- stopped: target is currently stopped on a breakpoint and stopped-only tools are available.
+- running_unmanaged: target process is alive, but eDBG is not currently waiting for a breakpoint.
+- exited: target process is no longer running. If unexpected_exit is true, the app likely exited or crashed while eDBG was waiting for a breakpoint.`)
 }
 
 func (this *Server) setCommonHeaders(w http.ResponseWriter) {
