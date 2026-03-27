@@ -20,6 +20,7 @@
 - Supports common debugging functionalities (see "Command Details")
 - Uses pwndbg-like CLI interface with GDB-style interactions for ease of use
 - File+offset based breakpoint registration enables quick startup and supports multi-thread/process debugging
+- Supports MCP mode, giving LLMs stable dynamic-analysis capabilities with little to no need to bypass anti-debugging.
 
 ## 💕 Demo
 

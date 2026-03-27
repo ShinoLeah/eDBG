@@ -1,7 +1,5 @@
 # eDBG MCP
 
-This document focuses on eDBG's MCP mode and the host-side installer workflow.
-
 ## Overview
 
 - Phone-side `eDBG` exposes an HTTP MCP server
@@ -15,19 +13,28 @@ Default MCP URL:
 http://127.0.0.1:19810/mcp
 ```
 
-## Start On The Device
+## Usage
+
+1. Download the latest [Release](https://github.com/ShinoLeah/eDBG/releases) build and the installer for your host platform
+2. Install the MCP tool on the host:
+
+```shell
+./edbg-mcp-install --install
+```
+
+3. Push `eDBG` to the device and start it in MCP mode:
 
 ```shell
 adb push eDBG /data/local/tmp
 adb shell
 su
 chmod +x /data/local/tmp/eDBG
-/data/local/tmp/eDBG --mcp
+./data/local/tmp/eDBG --mcp
 ```
 
 If `--mcp-port` is not specified, eDBG listens on `19810`.
 
-Forward the port on the host:
+4. Forward the port on the host:
 
 ```shell
 adb forward tcp:19810 tcp:19810
@@ -45,17 +52,6 @@ adb forward tcp:19810 tcp:19810
 - `run` directly launch the attached target app with `am start`
 - `continue` blocks until a breakpoint is actually hit
 - `quit` only resets the current MCP context and returns to the initial standby state; it does not stop the MCP server
-
-Recommended flow:
-
-```text
-1. Start eDBG: /data/local/tmp/eDBG --mcp
-2. Forward the port: adb forward tcp:19810 tcp:19810
-3. Call attach(package, library) to select the target
-4. Call break to add virtual-offset breakpoints
-5. Call run to launch the app
-6. Call continue and wait for a breakpoint hit
-```
 
 ## Building The Installer
 
@@ -84,24 +80,24 @@ By default, it builds installer binaries for these mainstream desktop targets:
 ## Installer Usage
 
 ```shell
-./bin/edbg-mcp-install --list-clients
-./bin/edbg-mcp-install --install
-./bin/edbg-mcp-install --install --clients codex,cursor,claude
-./bin/edbg-mcp-install --project --install --clients cursor,vscode,zed
-./bin/edbg-mcp-install --config
+./edbg-mcp-install --list-clients
+./edbg-mcp-install --install
+./edbg-mcp-install --install --clients codex,cursor,claude
+./edbg-mcp-install --project --install --clients cursor,vscode,zed
+./edbg-mcp-install --config
 ```
 
 If you change `--mcp-port`, or use a different local forwarded port:
 
 ```shell
-./bin/edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
+./edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
 ```
 
 To remove installed config:
 
 ```shell
-./bin/edbg-mcp-install --uninstall
-./bin/edbg-mcp-install --uninstall --clients codex,cursor
+./edbg-mcp-install --uninstall
+./edbg-mcp-install --uninstall --clients codex,cursor
 ```
 
 ## Supported AI Clients
@@ -109,7 +105,7 @@ To remove installed config:
 You can always inspect the live list with:
 
 ```shell
-./bin/edbg-mcp-install --list-clients
+./edbg-mcp-install --list-clients
 ```
 
 The current implementation covers major clients such as:

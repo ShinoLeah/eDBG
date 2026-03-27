@@ -1,7 +1,5 @@
 # eDBG MCP
 
-本文档专门说明 eDBG 的 MCP 模式，以及 host 侧 installer 的使用方式。
-
 ## 概览
 
 - 手机端 `eDBG` 负责提供 HTTP MCP 服务
@@ -15,19 +13,24 @@
 http://127.0.0.1:19810/mcp
 ```
 
-## 手机端启动
+## 使用
 
+1. 下载最新 [Release](https://github.com/ShinoLeah/eDBG/releases) 版本和对应平台的 installer
+2. 主机安装 mcp 工具：
+```shell
+./edbg-mcp-install --install
+```
+3. 推送到手机并运行 mcp 模式
 ```shell
 adb push eDBG /data/local/tmp
 adb shell
 su
 chmod +x /data/local/tmp/eDBG
-/data/local/tmp/eDBG --mcp
+./data/local/tmp/eDBG --mcp
 ```
 
 如果没有指定 `--mcp-port`，默认监听 `19810`。
-
-本地转发：
+4. 本地转发监听端口：
 
 ```shell
 adb forward tcp:19810 tcp:19810
@@ -45,17 +48,6 @@ adb forward tcp:19810 tcp:19810
 - `run` 直接启动当前目标 app，会执行 `am start`
 - `continue` 会阻塞等待，直到真正命中断点才返回
 - `quit` 只会清空当前 MCP 上下文并回到初始待命状态，不会退出 MCP server
-
-推荐工作流：
-
-```text
-1. 启动 eDBG: /data/local/tmp/eDBG --mcp
-2. 主机转发: adb forward tcp:19810 tcp:19810
-3. AI 调用 attach(package, library) 选中目标
-4. AI 调用 break 设置虚拟偏移断点
-5. AI 调用 run 启动 app
-6. AI 调用 continue 等待断点命中
-```
 
 ## Installer 构建
 
@@ -84,24 +76,24 @@ bin/
 ## Installer 用法
 
 ```shell
-./bin/edbg-mcp-install --list-clients
-./bin/edbg-mcp-install --install
-./bin/edbg-mcp-install --install --clients codex,cursor,claude
-./bin/edbg-mcp-install --project --install --clients cursor,vscode,zed
-./bin/edbg-mcp-install --config
+./edbg-mcp-install --list-clients
+./edbg-mcp-install --install
+./edbg-mcp-install --install --clients codex,cursor,claude
+./edbg-mcp-install --project --install --clients cursor,vscode,zed
+./edbg-mcp-install --config
 ```
 
 如果你改了 `--mcp-port`，或者把本地转发端口改成了别的值：
 
 ```shell
-./bin/edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
+./edbg-mcp-install --install --url http://127.0.0.1:23456/mcp
 ```
 
 卸载配置：
 
 ```shell
-./bin/edbg-mcp-install --uninstall
-./bin/edbg-mcp-install --uninstall --clients codex,cursor
+./edbg-mcp-install --uninstall
+./edbg-mcp-install --uninstall --clients codex,cursor
 ```
 
 ## 当前支持的 AI Client
@@ -109,7 +101,7 @@ bin/
 可通过命令查看：
 
 ```shell
-./bin/edbg-mcp-install --list-clients
+./edbg-mcp-install --list-clients
 ```
 
 当前实现覆盖的主流客户端包括：
